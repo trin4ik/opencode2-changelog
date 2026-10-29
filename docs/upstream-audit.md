@@ -49,9 +49,10 @@ The built-in `app.highlights` keeps at most five items per release, truncated (t
 trailing PR links stripped). It is not a full changelog, so the plugin builds its own source:
 
 1. `CHANGELOG.md` from `dev` (required): https://raw.githubusercontent.com/anomalyco/opencode/dev/CHANGELOG.md
-2. Newest v2 tag via `GET /repos/anomalyco/opencode/git/matching-refs/tags/v2.` (about 16 KB).
-3. Versions missing from `dev` come from the tag's `CHANGELOG.md`, otherwise from the GitHub Release body
-   (`releases/tags/v<version>`).
+2. Newest version from the endpoint OpenCode's own updater reads (`https://opencode.ai/update/api/latest/cli/npm`),
+   then npm (`@opencode/cli` `latest`), and only then the GitHub tags API (`git/matching-refs/tags/v2.`).
+3. The newest, installed and requested versions missing from `dev` come from their tag's `CHANGELOG.md`, otherwise
+   from the GitHub Release body (`releases/tags/v<version>`).
 
 Why this chain, as observed on 2026-10-29:
 
@@ -60,11 +61,16 @@ Why this chain, as observed on 2026-10-29:
 - Not every version has a GitHub Release (none for 2.1.4).
 - `releases/latest` points to V1 (`v1.19.5`), the release list is too heavy (30 entries ≈ 2.3 MB), and the site's
   `/changelog.json` is V1. None of them is used.
-- The unauthenticated GitHub API is limited to 60 requests/hour. GitHub errors never break notes from `dev`.
+- The unauthenticated GitHub API is limited to 60 requests/hour per IP. In 0.1.1 it was the only source of the newest
+  version: when it was exhausted, a fresh install on 2.1.4 silently showed 2.2.0 while `/update` offered 2.2.1.
+  The updater endpoint and `raw.githubusercontent.com` are not rate-limited that way. GitHub errors never break notes
+  from `dev`.
 
 Cache (`source.v2`; `source.v1` is ignored): stores the `dev` text, added versions and the newest tag.
 A valid cache renders synchronously. TTL is 1 hour and a refresh starts only when the window opens.
-If the requested, installed or newest version is absent, a recheck happens at most every 5 minutes.
+The cache also records which versions were looked up (`checked`). A wanted version that was never looked up — e.g.
+the new installed version right after an OpenCode update — is fetched at once; one that was looked up and is still
+missing, or an unknown newest version, is rechecked at most every 5 minutes.
 A cold close aborts the HTTP request; a warm refresh belongs to setup and is aborted on unload.
 Absent versions are never invented. The UI states when a different version is shown. Only real version sections
 are kept, and the translation cache is keyed by a hash of the text actually received.

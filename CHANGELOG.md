@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-10-29
+
+- Fix: the newest OpenCode version is now read from the same endpoint `/update` uses (then npm), not only from the
+  GitHub API. With the API rate-limited, 0.1.1 showed 2.2.0 as the latest while 2.2.1 was out.
+- Fix: right after an OpenCode update the notes for the new installed version are fetched at once instead of showing
+  “Notes for … are not published yet” for up to 5 minutes. Existing caches heal on the next open.
+
 ## 0.1.1 — 2026-10-29
 
 - Installer `scripts/install.mjs`: checks that OpenCode is 2.1.4 or newer (and explains how to update otherwise),

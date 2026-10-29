@@ -24,11 +24,20 @@ export type ReleaseItem = {
 export type ExtraRelease = { version: string; date: string; markdown: string; url: string }
 
 /** Everything fetched from upstream; `latest` is the newest V2 release tag, when it could be determined. */
-export type ChangelogSource = { markdown: string; extra: ExtraRelease[]; latest?: string }
+export type ChangelogSource = {
+  markdown: string
+  extra: ExtraRelease[]
+  latest?: string
+  /** Versions looked up beyond `dev`; one still missing afterwards is genuinely unpublished for now. */
+  checked?: string[]
+}
 
 const REPOSITORY = "anomalyco/opencode"
 export const SOURCE_URL = `https://raw.githubusercontent.com/${REPOSITORY}/dev/CHANGELOG.md`
 const TAGS_URL = `https://api.github.com/repos/${REPOSITORY}/git/matching-refs/tags/v2.`
+// The endpoint OpenCode's own updater (`/update`, install script) reads; npm is its distribution channel.
+const UPDATER_URL = "https://opencode.ai/update/api/latest/cli/npm"
+const NPM_LATEST_URL = "https://registry.npmjs.org/@opencode%2Fcli/latest"
 const tagChangelogUrl = (version: string) => `https://raw.githubusercontent.com/${REPOSITORY}/v${version}/CHANGELOG.md`
 const releaseApiUrl = (version: string) => `https://api.github.com/repos/${REPOSITORY}/releases/tags/v${version}`
 export const SOURCE_PAGE_PREFIX = `https://github.com/${REPOSITORY}/`
@@ -275,7 +284,19 @@ async function fetchText(url: string, signal: AbortSignal, accept?: string): Pro
 }
 
 async function fetchJson(url: string, signal: AbortSignal): Promise<unknown> {
-  return JSON.parse(await fetchText(url, signal, "application/vnd.github+json"))
+  return JSON.parse(
+    await fetchText(
+      url,
+      signal,
+      url.startsWith("https://api.github.com/") ? "application/vnd.github+json" : "application/json",
+    ),
+  )
+}
+
+/** A plain x.y.z V2 version from a `{ version }` JSON document. */
+async function versionField(url: string, signal: AbortSignal): Promise<string | undefined> {
+  const version = ((await fetchJson(url, signal)) as { version?: unknown } | null)?.version
+  return typeof version === "string" && V2_VERSION.test(version) ? version : undefined
 }
 
 /** Newest plain x.y.z V2 tag. Tags are pushed by the release workflow, so this is what the updater offers. */
@@ -316,7 +337,10 @@ async function releaseNotes(version: string, signal: AbortSignal): Promise<Extra
  * and missing versions are filled from its CHANGELOG.md, then from its GitHub Release.
  * Only `dev` is required: GitHub API rate limits or outages leave `latest` unknown, not the notes broken.
  */
-export async function loadChangelog(signal?: AbortSignal): Promise<ChangelogSource & { releases: Release[] }> {
+export async function loadChangelog(
+  signal?: AbortSignal,
+  wanted: readonly (string | undefined)[] = [],
+): Promise<ChangelogSource & { releases: Release[] }> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError")
 
   const controller = new AbortController()
@@ -344,25 +368,38 @@ export async function loadChangelog(signal?: AbortSignal): Promise<ChangelogSour
     const base = parseChangelog(markdown)
     const extra: ExtraRelease[] = []
     const known = () => new Set([...base, ...extra].map((release) => release.version))
-    const latest = await optional(() => latestTag(within(EXTRA_TIMEOUT_MS)))
+    // The same answer `/update` gets; GitHub's API (60 requests/hour per IP) is only the last resort.
+    let latest: string | undefined
+    for (const lookup of [
+      () => versionField(UPDATER_URL, within(EXTRA_TIMEOUT_MS)),
+      () => versionField(NPM_LATEST_URL, within(EXTRA_TIMEOUT_MS)),
+      () => latestTag(within(EXTRA_TIMEOUT_MS)),
+    ]) {
+      latest = await optional(lookup)
+      if (latest) break
+    }
 
-    if (latest && !known().has(latest)) {
+    // Newest first: one tag's CHANGELOG.md usually covers the older missing versions too.
+    const targets = [...new Set([latest, ...wanted])]
+      .filter((version): version is string => !!version && V2_VERSION.test(version))
+      .sort((left, right) => compareVersions(right, left))
+    for (const target of targets) {
+      if (known().has(target)) continue
       const tagged = await optional(async () =>
-        parseChangelog(await fetchText(tagChangelogUrl(latest), within(EXTRA_TIMEOUT_MS)), `v${latest}`),
+        parseChangelog(await fetchText(tagChangelogUrl(target), within(EXTRA_TIMEOUT_MS)), `v${target}`),
       )
       for (const release of tagged ?? []) {
-        if (!known().has(release.version) && compareVersions(release.version, latest) <= 0) {
+        if (!known().has(release.version) && compareVersions(release.version, target) <= 0) {
           const { version, date, markdown, url } = release
           extra.push({ version, date, markdown, url })
         }
       }
-    }
-    if (latest && !known().has(latest)) {
-      const published = await optional(() => releaseNotes(latest, within(EXTRA_TIMEOUT_MS)))
+      if (known().has(target)) continue
+      const published = await optional(() => releaseNotes(target, within(EXTRA_TIMEOUT_MS)))
       if (published) extra.push(published)
     }
 
-    const source = { markdown, extra, latest }
+    const source = { markdown, extra, latest, checked: targets }
     return { ...source, releases: buildReleases(source) }
   } catch (error) {
     if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError")

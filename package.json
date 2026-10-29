@@ -1,6 +1,6 @@
 {
   "name": "opencode2-changelog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Read OpenCode 2 release notes in the TUI, translated into your language",
   "license": "MIT",
   "repository": {

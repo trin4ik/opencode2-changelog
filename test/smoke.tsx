@@ -150,11 +150,13 @@ try {
   // dev lags behind the newest tag; the tag's changelog lacks its own section; its GitHub Release has it.
   const requested: string[] = []
   let tags = ["v2.1.2", "v2.1.4", "v2.1.5", "v2.10.0", "v2.10.0-beta.1"]
+  let updater: string | undefined // version reported by OpenCode's updater endpoint; undefined = unavailable
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const href = String(url)
     requested.push(href)
     assert.ok(init?.signal)
     if (href === SOURCE_URL) return new Response(source, { status: 200 })
+    if (href.startsWith("https://opencode.ai/update/") && updater) return Response.json({ version: updater })
     if (href.endsWith("/git/matching-refs/tags/v2."))
       return Response.json(tags.map((tag) => ({ ref: `refs/tags/${tag}` })))
     if (href.endsWith("/v2.10.0/CHANGELOG.md"))
@@ -190,19 +192,43 @@ try {
     "cached source rebuilds the same releases",
   )
   tags = ["v2.1.4"]
+  updater = "2.1.4"
   requested.length = 0
   assert.equal((await releases.loadReleases()).length, 2)
-  assert.equal(requested.length, 2, "an up-to-date dev changelog needs only the tag lookup")
+  assert.equal(requested.length, 2, "an up-to-date dev changelog needs only the updater lookup")
+  // Reported bug: GitHub's API is rate-limited, yet `/update` already offers a release missing from dev.
+  updater = "2.10.0"
+  const limited = globalThis.fetch
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) =>
+    String(url).startsWith("https://api.github.com/")
+      ? Promise.resolve(new Response("rate limited", { status: 403, statusText: "Forbidden" }))
+      : limited(url, init)) as typeof fetch
+  const throttled = await releases.loadChangelog(undefined, ["2.1.5"])
+  assert.equal(throttled.latest, "2.10.0", "the newest version comes from the updater, not GitHub's API")
+  assert.ok(
+    throttled.releases.some((item) => item.version === "2.1.5"),
+    "the installed version is looked up too",
+  )
+  assert.ok(throttled.checked?.includes("2.10.0"), "a version still missing after the lookup is marked as checked")
+  updater = undefined
   globalThis.fetch = (async (url: string | URL | Request) =>
     String(url) === SOURCE_URL
       ? new Response(source)
       : new Response("rate limited", { status: 403, statusText: "Forbidden" })) as unknown as typeof fetch
   const offline = await releases.loadChangelog()
-  assert.equal(offline.latest, undefined, "a GitHub API failure leaves the newest tag unknown")
+  assert.equal(offline.latest, undefined, "unavailable version sources leave the newest version unknown")
   assert.equal(offline.releases.length, 2, "and does not break the dev notes")
   globalThis.fetch = (async () =>
     new Response("denied", { status: 403, statusText: "Forbidden" })) as unknown as typeof fetch
   await assert.rejects(releases.loadReleases(), /HTTP 403 Forbidden/)
+  // Reported bug: right after an OpenCode update the cache lacks the new installed version; fetch it at once.
+  const { isFresh } = (await import(
+    pathToFileURL(`${dist}/changelog-service.js`).href
+  )) as typeof import("../src/changelog-service")
+  const cachedNow = { at: Date.now(), releases: parsed, latest: "2.1.4", checked: [] as string[] }
+  assert.equal(isFresh(cachedNow, ["2.1.4"]), true)
+  assert.equal(isFresh(cachedNow, ["2.2.1"]), false, "a never looked-up installed version refreshes immediately")
+  assert.equal(isFresh({ ...cachedNow, checked: ["2.2.1"] }, ["2.2.1"]), true, "a looked-up missing one waits")
   const controller = new AbortController()
   globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
     new Promise((_resolve, reject) =>

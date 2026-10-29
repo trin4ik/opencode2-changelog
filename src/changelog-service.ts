@@ -20,10 +20,18 @@ import { createMemo } from "solid-js"
 
 type Preferences = Partial<TranslationSettings> & { recentModels: ModelRef[]; favoriteModels: ModelRef[] }
 // v1 cached only the dev changelog, which can lag behind a published release; it is ignored, not migrated.
-type SourceCache = { version: 2; at: number; markdown: string; extra: ExtraRelease[]; latest: string | null }
-export type Loaded = { at: number; releases: Release[]; latest?: string }
+type SourceCache = {
+  version: 2
+  at: number
+  markdown: string
+  extra: ExtraRelease[]
+  latest: string | null
+  checked?: string[]
+}
+export type Loaded = { at: number; releases: Release[]; latest?: string; checked: string[] }
 const SOURCE_TTL_MS = 60 * 60_000
-// A known-missing version (requested, installed or newest tag) is rechecked on open, but not more often.
+// A version that was looked up and is still missing (or an unknown newest version) is rechecked at most this often;
+// a version that was never looked up (e.g. right after an OpenCode update) is fetched at once.
 const MISSING_RECHECK_MS = 5 * 60_000
 const MAX_CACHED_BYTES = 4 * 1024 * 1024
 
@@ -43,7 +51,7 @@ function extraRelease(value: unknown): value is ExtraRelease {
 
 function cachedSource(value: unknown): Loaded | undefined {
   if (!value || typeof value !== "object") return
-  const { version, at, markdown, extra, latest } = value as Partial<SourceCache>
+  const { version, at, markdown, extra, latest, checked = [] } = value as Partial<SourceCache>
   if (
     version !== 2 ||
     !Number.isSafeInteger(at) ||
@@ -53,11 +61,13 @@ function cachedSource(value: unknown): Loaded | undefined {
     !Array.isArray(extra) ||
     !extra.every(extraRelease) ||
     (latest !== null && (typeof latest !== "string" || !V2_VERSION.test(latest))) ||
+    !Array.isArray(checked) ||
+    !checked.every((item) => typeof item === "string" && V2_VERSION.test(item)) ||
     Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_CACHED_BYTES
   )
     return
   try {
-    return { at: at!, releases: buildReleases({ markdown, extra }), latest: latest ?? undefined }
+    return { at: at!, releases: buildReleases({ markdown, extra }), latest: latest ?? undefined, checked }
   } catch {
     return
   }
@@ -67,10 +77,11 @@ function cachedSource(value: unknown): Loaded | undefined {
 export function isFresh(data: Loaded, wanted: readonly (string | undefined)[]): boolean {
   const age = Date.now() - data.at
   if (age >= SOURCE_TTL_MS) return false
-  const missing = [...wanted, data.latest].some(
-    (version) => version && !data.releases.some((release) => release.version === version),
+  const missing = [...wanted, data.latest].filter(
+    (version): version is string => !!version && !data.releases.some((release) => release.version === version),
   )
-  return !missing || age < MISSING_RECHECK_MS
+  if (missing.some((version) => !data.checked.includes(version))) return false
+  return (missing.length === 0 && !!data.latest) || age < MISSING_RECHECK_MS
 }
 
 function storedModels(value: unknown): ModelRef[] {
@@ -191,6 +202,7 @@ export function createChangelogService(context: Plugin.Context, open: (version?:
         draft.markdown = ""
         draft.extra = []
         draft.latest = null
+        draft.checked = []
       }),
     ])
   }
@@ -222,8 +234,8 @@ export function createChangelogService(context: Plugin.Context, open: (version?:
     if (!pending) {
       const controller = new AbortController()
       const startedAt = Date.now()
-      const promise = loadChangelog(controller.signal)
-        .then(async ({ markdown, extra, latest, releases }) => {
+      const promise = loadChangelog(controller.signal, wanted)
+        .then(async ({ markdown, extra, latest, checked = [], releases }) => {
           const at = Date.now()
           if (active && !controller.signal.aborted) {
             // The synced store may have been updated by another TUI while this request was in flight.
@@ -234,9 +246,10 @@ export function createChangelogService(context: Plugin.Context, open: (version?:
               draft.markdown = markdown
               draft.extra = extra.map((item) => ({ ...item }))
               draft.latest = latest ?? null
+              draft.checked = [...checked]
             }).catch(() => {}) // A failed disk write must not discard successfully fetched notes.
           }
-          return { at, releases, latest }
+          return { at, releases, latest, checked }
         })
         .finally(() => {
           if (pending?.promise === promise) pending = undefined
