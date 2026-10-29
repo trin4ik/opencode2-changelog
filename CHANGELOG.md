@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-10-29
+
+- Installer `scripts/install.mjs`: checks that OpenCode is 2.1.4 or newer (and explains how to update otherwise),
+  builds the plugin and registers it in `cli.json` with the built-in highlights dialog turned off.
+- README: install by asking your agent first, manual install below; step-by-step instructions for coding agents.
+  Verified on OpenCode 2.0.32 and 2.1.3 (refused) and 2.1.4, 2.2.0, 2.2.1 (installed and working).
+
 ## 0.1.0 — 2026-10-29
 
 First public release.

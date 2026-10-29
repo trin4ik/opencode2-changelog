@@ -2,7 +2,7 @@
 
 ![OpenCode](https://img.shields.io/badge/OpenCode-%E2%89%A5%202.1.4-black)
 ![Plugin](https://img.shields.io/badge/plugin-TUI-blue)
-![Version](https://img.shields.io/badge/version-0.1.0-green)
+![Version](https://img.shields.io/badge/version-0.1.1-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 Read OpenCode release notes right in the terminal — in your language.
