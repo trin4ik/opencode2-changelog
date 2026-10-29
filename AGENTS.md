@@ -12,6 +12,8 @@ commands that clash with built-in ones.
 
 ## Layout
 
+- `scripts/install.mjs` — the installer (Node built-ins only): OpenCode version check, build, `cli.json` registration.
+  Keep the README "For coding agents" steps in sync with it.
 - `src/tui.tsx` — plugin entry: `/changelog` command in the `app` slot, notes loader.
 - `src/changelog-*.ts(x)` — the window, split by feature (dialog, reader, settings, model picker, shared service).
 - `src/releases.ts`, `src/translation.ts`, `src/models.ts` — pure logic: release sources, prompts and caches, model

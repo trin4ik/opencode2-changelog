@@ -29,40 +29,71 @@ Read OpenCode release notes right in the terminal — in your language.
 ## Requirements
 
 - OpenCode **2.1.4 or newer** (TUI). See [docs/upstream-audit.md](docs/upstream-audit.md#minimum-opencode-version).
-- Node.js 20+ to build; [Bun](https://bun.sh) to run the test.
+- Git, Node.js 20+ and npm to build; [Bun](https://bun.sh) only to run the test.
 
 ## Install
 
-```sh
-git clone https://github.com/trin4ik/opencode2-changelog.git
-cd opencode2-changelog
-npm ci
-npm run build
+### Ask your agent
+
+Paste this into OpenCode:
+
+```text
+https://github.com/trin4ik/opencode2-changelog
+install this plugin globally
 ```
 
-Register the plugin in `~/.config/opencode/cli.json` (the TUI config, not `opencode.jsonc`) and turn off OpenCode's
-built-in highlights dialog, so that after an update this changelog opens instead. Run from the plugin folder; other
-plugins and settings are kept:
+The agent follows the steps in [For coding agents](#for-coding-agents) below. On OpenCode older than 2.1.4 the
+installer stops and tells you to update first.
+
+### Manual
 
 ```sh
-cfg=~/.config/opencode/cli.json
-[ -f "$cfg" ] || echo '{}' > "$cfg"
-jq --arg p "$PWD" '.plugins = ((.plugins // []) - [$p] + [$p]) | .highlights = false' "$cfg" > "$cfg.tmp" &&
-  mv "$cfg.tmp" "$cfg"
+git clone https://github.com/trin4ik/opencode2-changelog.git ~/.local/share/opencode2-changelog
+node ~/.local/share/opencode2-changelog/scripts/install.mjs
 ```
 
-Or edit the file by hand — the result should contain:
+The installer checks that OpenCode is 2.1.4 or newer, builds the plugin and registers it in the TUI settings
+(`$XDG_CONFIG_HOME/opencode/cli.json`, by default `~/.config/opencode/cli.json`) — other plugins and settings are
+kept, the previous file is saved as `cli.json.bak`. It also sets `"highlights": false`, so that after an OpenCode
+update this changelog opens instead of the built-in highlights dialog (`--keep-highlights` keeps both). Running it
+again is safe.
+
+Restart the TUI and type `/changelog`. To update the plugin later:
+
+```sh
+git -C ~/.local/share/opencode2-changelog pull && node ~/.local/share/opencode2-changelog/scripts/install.mjs
+```
+
+<details>
+<summary>Without the installer</summary>
+
+Build it (`npm ci && npm run build` in the clone) and add the absolute path to `cli.json`:
 
 ```json
 {
-  "plugins": ["/absolute/path/to/opencode2-changelog"],
+  "plugins": ["/home/you/.local/share/opencode2-changelog"],
   "highlights": false
 }
 ```
 
-Restart the TUI and type `/changelog`. From now on, the first start after each OpenCode update opens it on the new
-version. Keep `"highlights"` unset if you want both windows; set the plugin option `openOnUpdate: false` if you want
-neither.
+Do not clone into `~/.config/opencode/plugins/`: OpenCode auto-loads that folder, and the plugin would load twice.
+
+</details>
+
+### For coding agents
+
+To install this plugin for the user, globally:
+
+1. Run `opencode --version`. If it is older than **2.1.4** (or not OpenCode 2), stop: tell the user that
+   opencode2-changelog does not work on their version and that they should update OpenCode (`/update` in the TUI or
+   `opencode upgrade`) first.
+2. If `~/.local/share/opencode2-changelog` exists, run `git -C ~/.local/share/opencode2-changelog pull`; otherwise
+   `git clone https://github.com/trin4ik/opencode2-changelog.git ~/.local/share/opencode2-changelog`.
+3. Run `node ~/.local/share/opencode2-changelog/scripts/install.mjs` (needs Node.js 20+ and npm) and show the user
+   its last lines. It exits with an error and an explanation if something is wrong — report that, do not work
+   around it.
+4. Do not edit `cli.json` by hand, do not install from npm, do not clone into `~/.config/opencode/plugins/`.
+5. Tell the user to restart the OpenCode TUI and type `/changelog`.
 
 ## Usage
 
