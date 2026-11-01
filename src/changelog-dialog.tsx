@@ -67,14 +67,16 @@ export function ChangelogDialog(props: {
   })
 
   // A display timer only, running while the check is in flight; it never touches the network.
+  const animated = () => service.settings().animations !== false
   const [spinnerFrame, setSpinnerFrame] = createSignal(0)
   createEffect(() => {
-    if (!props.refreshing || service.settings().animations === false) return
+    if (!props.refreshing || !animated()) return
     const timer = setInterval(() => setSpinnerFrame((frame) => frame + 1), SPINNER_MS)
     onCleanup(() => clearInterval(timer))
   })
-  const spinner = () =>
-    service.settings().animations === false ? "⋯" : SPINNER_FRAMES[spinnerFrame() % SPINNER_FRAMES.length]
+  // Takes the arrow's cell, so the buttons and an open dropdown keep their place when the check ends.
+  const versionMark = () =>
+    !props.refreshing ? "▾" : animated() ? SPINNER_FRAMES[spinnerFrame() % SPINNER_FRAMES.length] : "⋯"
 
   const [editor, setEditorValue] = createSignal<Editor>()
   const [controlsFocused, setControlsFocused] = createSignal(false)
@@ -265,7 +267,7 @@ export function ChangelogDialog(props: {
   const actionTitle = (key: string, title: string) => {
     const personal = reader.personal()
     return key === "v"
-      ? `Version ${version() ?? "—"} ▾${props.refreshing ? ` ${spinner()}` : ""}`
+      ? `Version ${version() ?? "—"} ${versionMark()}`
       : key === "l"
         ? `${reader.original() ? "EN · original" : (languages().find((item) => item.code === service.settings().language)?.name ?? service.settings().language)} ▾`
         : key === "d"

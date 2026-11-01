@@ -5,7 +5,12 @@
 - Fix: after a refresh found newer notes, the window showed the new version number over the previous release's
   text until the new translation arrived. Now the new notes appear at once in the original and the loading animation
   runs over them; a saved translation of the new notes is shown immediately.
-- While the saved notes are being checked for a newer version, a spinner is shown next to the version.
+- While the saved notes are being checked for a newer version, a spinner takes the place of the version's ▾.
+- Fix: translated Highlights sometimes opened with a title of their own ("Основное", "Основные моменты:"). The
+  Highlights heading is no longer sent for translation, the default prompt forbids adding titles, and a short title
+  before the first item is dropped. A saved copy of the previous default prompt follows the new one.
+- Saved translations made with the default prompt (all views and languages) and saved “For me” translations are
+  requested again once, the next time each is opened.
 
 ## 0.1.2 — 2026-10-29
 

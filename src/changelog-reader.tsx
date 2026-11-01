@@ -6,7 +6,15 @@ import type { ChangelogService } from "./changelog-service"
 import { createBodyMotion } from "./motion/engine"
 import { loading, transitionById } from "./motion/index"
 import { errorMessage, type ModelRef } from "./models"
-import { candidateItems, mainItems, readableNotes, releaseItems, renderItems, type Release } from "./releases"
+import {
+  candidateItems,
+  mainNotes,
+  readableNotes,
+  releaseItems,
+  renderItems,
+  withoutLeadIn,
+  type Release,
+} from "./releases"
 import { isEnglish, type TranslationSettings } from "./translation"
 
 export type Level = "important" | "personal" | "full"
@@ -154,32 +162,24 @@ export function createReader(input: {
   const personal = createMemo(() =>
     level() === "personal" && selection().key === selectionKey() ? selection() : undefined,
   )
-  const mainSource = createMemo(() =>
-    renderItems(
-      parsed().items,
-      mainItems(parsed().items).map((item) => item.id),
-    ),
-  )
+  const mainSource = createMemo(() => mainNotes(parsed().items))
   const source = createMemo(() => {
     if (level() === "full" || parsed().error) return release()?.markdown ?? ""
     const ids = level() === "personal" ? (personal()?.ids ?? []) : []
     return withSelected(mainSource(), ids)
   })
+  // The shown text with the source it came from: a kept translation of the previous view has a different source.
   const displayed = createMemo(() => {
     const ready = translated()
-    if (original() || parsed().error || error()) return source()
+    const untranslated = { text: source(), source: source() }
+    if (original() || parsed().error || error()) return untranslated
     // Keep the last readable translation while the next view of the same notes is being generated;
     // other or refreshed notes show their original at once, never the previous release's translation.
-    if (!ready || ready.release !== releaseKey()) return source()
-    if (busy() || personal()?.busy) return ready.text
-    return ready.source === source() ? ready.text : source()
+    if (!ready || ready.release !== releaseKey()) return untranslated
+    if (busy() || personal()?.busy || ready.source === source()) return ready
+    return untranslated
   })
-  const presentation = createMemo(() => {
-    const text = readableNotes(displayed())
-    return level() === "full"
-      ? text
-      : text.replace(/^#{2,6}\s+(?:Highlights|Главное|Основные изменения|Ключевые изменения)\s*\r?\n\s*/i, "")
-  })
+  const presentation = createMemo(() => withoutLeadIn(readableNotes(displayed().text), displayed().source))
   const problem = createMemo(() => {
     if (!error()) return ""
     if (FREE_LIMIT.test(error()))

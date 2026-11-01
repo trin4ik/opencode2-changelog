@@ -236,6 +236,32 @@ export function mainItems(items: ReleaseItem[]): ReleaseItem[] {
   return items.filter((item) => item.highlight || item.mandatory)
 }
 
+/**
+ * The Highlights view's own text: main items without the leading "### Highlights" heading. That heading names the
+ * view, not content; sent to a model it came back translated under varying names ("Основное", "Основные моменты").
+ */
+export function mainNotes(items: ReleaseItem[]): string {
+  return renderItems(
+    items,
+    mainItems(items).map((item) => item.id),
+  ).replace(/^###\s+Highlights[ \t]*\n+/i, "")
+}
+
+const LIST_ITEM = /^\s*(?:[-+*]|\d+[.)])\s/
+// A heading, a bold line or a short line that is not a sentence ("Основное", "Основные изменения:"). Longer text, or
+// text ending like a sentence or a PR reference "(#123)", is translated content.
+const LEAD_IN = /^(?:#{1,6}\s+\S.*|\*\*[^*]+\*\*:?|[^.!?]{0,59}[^.!?)\s])\s*$/
+
+/** A model may still open notes that start with a list with its own title; drop it. */
+export function withoutLeadIn(text: string, source: string): string {
+  if (!LIST_ITEM.test(source)) return text
+  const lines = text.replace(/^(?:[ \t]*\n)+/, "").split("\n")
+  const first = lines.findIndex((line) => LIST_ITEM.test(line))
+  // One title line, optionally followed by a blank line, and then the list.
+  if (first < 1 || first > 2 || !LEAD_IN.test(lines[0]!) || (first === 2 && lines[1]!.trim())) return text
+  return lines.slice(first).join("\n")
+}
+
 export function candidateItems(items: ReleaseItem[]): ReleaseItem[] {
   const main = mainItems(items)
   const mainMarkdown = new Set(main.map((item) => item.markdown))
