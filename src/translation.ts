@@ -272,7 +272,7 @@ export function createTranslator(
     text: string,
     settings: TranslationSettings,
     signal: AbortSignal,
-  ): Promise<{ text: string; model?: ModelRef }>
+  ): Promise<{ text: string; model?: ModelRef; cached?: boolean }>
   select(
     release: Release,
     settings: TranslationSettings,
@@ -282,7 +282,7 @@ export function createTranslator(
     release: Release,
     settings: TranslationSettings,
     signal: AbortSignal,
-  ): Promise<{ ids: string[]; text: string; model?: ModelRef }>
+  ): Promise<{ ids: string[]; text: string; model?: ModelRef; cached?: boolean }>
 } {
   const memory: SelectionCache = { entries: {} }
   const selections = selectionStore ?? {
@@ -501,7 +501,7 @@ export function createTranslator(
       const cached = boundedEntries(cache().entries)[keyForModel(settings.model)]
       if (cached) {
         try {
-          return { ...parse(cached.text), model: settings.model }
+          return { ...parse(cached.text), model: settings.model, cached: true }
         } catch {
           /* stale cache */
         }
@@ -551,7 +551,7 @@ export function createTranslator(
       // A saved answer spends nothing: it must remain available offline or after a free quota expires.
       const cached = cachedTranslation(text, settings)
       if (cached !== undefined) {
-        return { text: cached, model: settings.model }
+        return { text: cached, model: settings.model, cached: true }
       }
       return within(signal, TRANSLATION_TIMEOUT_MS, async (requestSignal) => {
         const output = await withModel(settings, requestSignal, (model) =>

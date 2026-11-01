@@ -732,6 +732,28 @@ try {
     await Bun.sleep(20)
   }
   assert.match(frame(), /Полный перевод содержит/, "All displays the completed full translation")
+  // Regression: notes refreshed upstream showed the previous translation until their own one arrived.
+  finishFull = undefined
+  setUiRelease({
+    ...release,
+    markdown: "### Highlights\n- Highlight item.\n\n### Changes\n- FULL RELEASE MARKER, refreshed upstream.",
+    hash: "refreshed-full",
+  })
+  for (let i = 0; i < 50 && !finishFull; i++) {
+    await view.renderOnce()
+    await Bun.sleep(20)
+  }
+  assert.ok(finishFull, "refreshed notes start their own translation")
+  for (let i = 0; i < 10 && !frame().includes("refreshed upstream"); i++) {
+    await view.renderOnce()
+    await Bun.sleep(20)
+  }
+  assert.match(frame(), /refreshed upstream/, "refreshed notes show their original while being translated")
+  assert.doesNotMatch(frame(), /Полный перевод/, "the previous notes' translation is not shown for refreshed notes")
+  // Assigned by the held provider callback, which TypeScript's narrowing cannot see.
+  ;(finishFull as ((value: { text: string }) => void) | undefined)!({
+    text: "Полный перевод содержит все изменения этого выпуска и дополнительные исправления.",
+  })
   holdRequest = true
   setUiSettings({ ...uiSettings(), language: "de" })
   for (let i = 0; i < 50 && !heldSignal; i++) {

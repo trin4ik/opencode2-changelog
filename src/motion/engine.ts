@@ -74,6 +74,7 @@ export function createBodyMotion(
   let revealRequested = 0
   let revealStarted = 0
   let preparationFrames = 0
+  let waitingFrames = 0
   let epoch = 0
   let pendingReveal: { update?: () => void; epoch: number; queued: boolean } | undefined
 
@@ -326,6 +327,13 @@ export function createBodyMotion(
         return afterPaint(cancel)
       try {
         if (phase() === "waiting") {
+          // Markdown changed together with the wait (other notes, their original) is laid out a frame later;
+          // capturing at once would freeze the previous text under the loading animation for the whole request.
+          if (waitingFrames > 0 && !old) {
+            waitingFrames--
+            afterPaint(() => renderer.requestRender())
+            return
+          }
           // The first native frame can precede Markdown layout. Never pin an empty snapshot
           // over the original for the entire model request; capture again once it is painted.
           if (old?.bounds.key !== rect.key || !old.readable.length) {
@@ -433,6 +441,7 @@ export function createBodyMotion(
     cancel()
     if (!untrack(enabled) || renderer.isDestroyed) return
     waitingStarted = performance.now()
+    waitingFrames = 2
     setFrame(0)
     setPhase("waiting")
     install()

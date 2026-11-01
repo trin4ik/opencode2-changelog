@@ -3,7 +3,7 @@
 import { usePlugin } from "@opencode/plugin/tui"
 import { TextAttributes, type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { createModelPicker } from "./changelog-model"
 import { ChangelogReader, createReader, type Level } from "./changelog-reader"
 import type { ChangelogService } from "./changelog-service"
@@ -24,6 +24,10 @@ const defaultLanguageNames = [
   { code: "ko", name: "한국어" },
 ]
 
+// The host's own Spinner frames and interval (packages/tui/src/component/spinner.tsx); "⋯" without animations.
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+const SPINNER_MS = 80
+
 const views = [
   { title: "Highlights", key: "1", detail: "important" as const },
   { title: "For me", key: "2", detail: "personal" as const },
@@ -36,6 +40,8 @@ export function ChangelogDialog(props: {
   /** Newest V2 release tag upstream, which may be newer than any notes found. */
   latest?: string
   initialVersion?: string
+  /** Saved notes are shown while the source is checked for a newer version. */
+  refreshing?: boolean
 }) {
   const context = usePlugin()
   const service = props.service
@@ -59,6 +65,16 @@ export function ChangelogDialog(props: {
       .sort((left, right) => compareVersions(right, left))[0]
     return expected ? `Notes for ${expected} are not published yet — showing ${shown}.` : ""
   })
+
+  // A display timer only, running while the check is in flight; it never touches the network.
+  const [spinnerFrame, setSpinnerFrame] = createSignal(0)
+  createEffect(() => {
+    if (!props.refreshing || service.settings().animations === false) return
+    const timer = setInterval(() => setSpinnerFrame((frame) => frame + 1), SPINNER_MS)
+    onCleanup(() => clearInterval(timer))
+  })
+  const spinner = () =>
+    service.settings().animations === false ? "⋯" : SPINNER_FRAMES[spinnerFrame() % SPINNER_FRAMES.length]
 
   const [editor, setEditorValue] = createSignal<Editor>()
   const [controlsFocused, setControlsFocused] = createSignal(false)
@@ -249,7 +265,7 @@ export function ChangelogDialog(props: {
   const actionTitle = (key: string, title: string) => {
     const personal = reader.personal()
     return key === "v"
-      ? `Version ${version() ?? "—"} ▾`
+      ? `Version ${version() ?? "—"} ▾${props.refreshing ? ` ${spinner()}` : ""}`
       : key === "l"
         ? `${reader.original() ? "EN · original" : (languages().find((item) => item.code === service.settings().language)?.name ?? service.settings().language)} ▾`
         : key === "d"

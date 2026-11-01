@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix: after a refresh found newer notes, the window showed the new version number over the previous release's
+  text until the new translation arrived. Now the new notes appear at once in the original and the loading animation
+  runs over them; a saved translation of the new notes is shown immediately.
+- While the saved notes are being checked for a newer version, a spinner is shown next to the version.
+
 ## 0.1.2 — 2026-10-29
 
 - Fix: the newest OpenCode version is now read from the same endpoint `/update` uses (then npm), not only from the

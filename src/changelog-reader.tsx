@@ -1,7 +1,7 @@
 // Release-notes reader: selection/translation requests with cancellation, the text shown and its motion viewport.
 import { usePlugin } from "@opencode/plugin/tui"
 import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
-import { batch, createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from "solid-js"
 import type { ChangelogService } from "./changelog-service"
 import { createBodyMotion } from "./motion/engine"
 import { loading, transitionById } from "./motion/index"
@@ -25,11 +25,13 @@ export function createReader(input: {
   const service = input.service
   const theme = context.theme.surface("dialog")
   const release = createMemo(() => input.releases().find((item) => item.version === input.version()))
+  // Version and hash: notes refreshed upstream under the same version are a different text to translate.
+  const releaseKey = (item = release()) => (item ? `${item.version}:${item.hash}` : "")
   const level = () => service.settings().detail ?? "important"
   const original = () => service.settings().original === true
   const animations = () => service.settings().animations !== false
   const [translated, setTranslated] = createSignal<{
-    version: string
+    release: string
     source: string
     text: string
     language: string
@@ -97,6 +99,15 @@ export function createReader(input: {
     void context.renderer.idle().then(() => syntax.destroy())
   })
 
+  // A running wait keeps the frame it captured. Other notes (a refresh replaced the release) need a fresh capture,
+  // or the previous release's text stays frozen under the loading animation until the translation arrives.
+  let waitingRelease: string | undefined
+  function wait() {
+    const key = untrack(() => releaseKey())
+    if (waitingRelease !== key && untrack(motion.phase) !== "idle") motion.cancel()
+    waitingRelease = key
+    motion.wait()
+  }
   function reveal(update: () => void) {
     const apply = () => {
       if (pendingVisualUpdate === apply) pendingVisualUpdate = undefined
@@ -157,8 +168,9 @@ export function createReader(input: {
   const displayed = createMemo(() => {
     const ready = translated()
     if (original() || parsed().error || error()) return source()
-    // Keep the last readable translation while the next view is being generated.
-    if (!ready || ready.version !== input.version()) return source()
+    // Keep the last readable translation while the next view of the same notes is being generated;
+    // other or refreshed notes show their original at once, never the previous release's translation.
+    if (!ready || ready.release !== releaseKey()) return source()
     if (busy() || personal()?.busy) return ready.text
     return ready.source === source() ? ready.text : source()
   })
@@ -201,7 +213,7 @@ export function createReader(input: {
         )
           return
         setSelection({ key, ids: [], busy: true, error: "" })
-        if (!input.editor()) motion.wait()
+        if (!input.editor()) wait()
         const settings = service.settings()
         const combined = !original() && !isEnglish(settings.language)
         const operation = combined
@@ -218,21 +230,25 @@ export function createReader(input: {
                 setSelection({ key, ids, model: result.model, busy: false, error: "" })
                 if ("text" in result && typeof result.text === "string")
                   setTranslated({
-                    version: item.version,
+                    release: releaseKey(item),
                     source: withSelected(mainSource(), ids),
                     text: result.text,
                     language: settings.language,
                   })
               })
             }
-            if ("text" in result && !input.editor()) reveal(update)
+            // A saved translation of other notes has no frame of the same text to morph from: show it at once.
+            const instant =
+              "text" in result && "cached" in result && !!result.cached && translated()?.release !== releaseKey(item)
+            if ("text" in result && !input.editor() && !instant) reveal(update)
             else {
+              if (instant) motion.cancel()
               update()
               // A selection that leaves the already displayed source unchanged starts no translation.
               const ready = translated()
               if (
                 !("text" in result) &&
-                ready?.version === item.version &&
+                ready?.release === releaseKey(item) &&
                 ready.source === source() &&
                 ready.language === settings.language
               )
@@ -293,10 +309,10 @@ export function createReader(input: {
           return
         }
         const settings = service.settings()
-        const currentVersion = input.version() ?? ""
+        const currentRelease = releaseKey()
         if (
           detail === "personal" &&
-          translated()?.version === currentVersion &&
+          translated()?.release === currentRelease &&
           translated()?.source === text &&
           translated()?.language === settings.language
         )
@@ -306,14 +322,14 @@ export function createReader(input: {
         if (showOriginal || isEnglish(settings.language)) {
           const update = () => {
             if (!controller.signal.aborted && !disposed)
-              setTranslated({ version: currentVersion, source: text, text, language: settings.language })
+              setTranslated({ release: currentRelease, source: text, text, language: settings.language })
           }
           if (input.editor()) update()
           else reveal(update)
           return
         }
         setBusy(true)
-        if (!input.editor()) motion.wait()
+        if (!input.editor()) wait()
         void service.translator
           .translate(text, { ...settings, detail, model: preferred && { ...preferred } }, controller.signal)
           .then(
@@ -324,13 +340,16 @@ export function createReader(input: {
               const update = () => {
                 if (!controller.signal.aborted && !disposed)
                   setTranslated({
-                    version: currentVersion,
+                    release: currentRelease,
                     source: text,
                     text: result.text,
                     language: settings.language,
                   })
               }
-              if (input.editor()) update()
+              // A saved translation of other notes has no frame of the same text to morph from: show it at once.
+              const instant = result.cached && translated()?.release !== currentRelease
+              if (instant) motion.cancel()
+              if (input.editor() || instant) update()
               else reveal(update)
               rememberModel(result.model, settings)
             },
@@ -352,7 +371,7 @@ export function createReader(input: {
       (value) => {
         pendingVisualUpdate?.()
         motion.cancel()
-        if (!value && (busy() || personal()?.busy)) motion.wait()
+        if (!value && (busy() || personal()?.busy)) wait()
       },
       { defer: true },
     ),
@@ -364,7 +383,7 @@ export function createReader(input: {
         if (!enabled) {
           pendingVisualUpdate?.()
           motion.cancel()
-        } else if (!input.editor() && (busy() || personal()?.busy)) motion.wait()
+        } else if (!input.editor() && (busy() || personal()?.busy)) wait()
       },
       { defer: true },
     ),

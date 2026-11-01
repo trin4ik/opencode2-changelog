@@ -129,6 +129,7 @@ function ChangelogLoader(props: { service: ChangelogService; initialVersion?: st
           service={props.service}
           releases={items().releases}
           latest={items().latest}
+          refreshing={Boolean(cached) && loaded.loading}
           initialVersion={props.initialVersion}
         />
       )}
