@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 — 2026-11-01
 
 - Fix: after a refresh found newer notes, the window showed the new version number over the previous release's
   text until the new translation arrived. Now the new notes appear at once in the original and the loading animation
@@ -11,6 +11,8 @@
   before the first item is dropped. A saved copy of the previous default prompt follows the new one.
 - Saved translations made with the default prompt (all views and languages) and saved “For me” translations are
   requested again once, the next time each is opened.
+- Development: `npm test` checks the sources in a few seconds; `npm run test:install` installs the plugin the README
+  way into a clean Docker container with the minimum and the newest OpenCode. Passed on OpenCode 2.1.4 and 2.2.5.
 
 ## 0.1.2 — 2026-10-29
 
