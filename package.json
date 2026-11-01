@@ -32,6 +32,7 @@
     "build": "node build.mjs",
     "prepack": "npm run build",
     "test": "bun --preload @opentui/solid/preload test/smoke.tsx",
+    "test:install": "node test/install.mjs",
     "format": "prettier --write tui.tsx build.mjs scripts src test docs *.md package.json tsconfig.json",
     "format:check": "prettier --check tui.tsx build.mjs scripts src test docs *.md package.json tsconfig.json",
     "setup": "node scripts/install.mjs"

@@ -162,7 +162,8 @@ assumption: [docs/upstream-audit.md](docs/upstream-audit.md).
 npm ci
 npm run check         # TypeScript
 npm run format:check  # Prettier
-npm test              # packs, installs and exercises the plugin (Bun)
+npm test              # fast offline check of the sources (Bun, a few seconds)
+npm run test:install  # before a release: Docker, installs into the minimum and newest OpenCode
 ```
 
 ```
@@ -205,7 +206,7 @@ A screenshot or a short recording helps a lot with anything visual.
 **Pull requests.** Keep them small and focused. Run `npm run check`, `npm run format:check` and `npm test`, and say in
 the description how you verified the change — for visual changes, in a real OpenCode TUI. Read
 [AGENTS.md](AGENTS.md) first: it lists the rules this plugin keeps (public API only, no background polling, cancelled
-requests, the single smoke test).
+requests, the two tests).
 
 ## License
 

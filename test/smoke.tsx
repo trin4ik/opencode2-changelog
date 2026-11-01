@@ -1,10 +1,6 @@
-// One offline integration smoke: inspect the packed V2 entry, parsing/loading, translation cache, and real TUI renderer.
+// Fast offline check of the sources during development: parsing/loading, caches, cancellation and the real renderer.
+// Packing and installing into a real OpenCode is test/install.mjs, run before a release.
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { rmSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { fileURLToPath, pathToFileURL } from "node:url"
 import { testRender, useRenderer } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { RGBA, type BoxRenderable } from "@opentui/core"
@@ -13,74 +9,28 @@ import type { Release } from "../src/releases"
 import { SOURCE_URL } from "../src/releases"
 import type { TranslationCache, TranslationSettings } from "../src/translation"
 
-// Animation timers may request a native render while a frame is captured; retry that race instead of flaking.
-function capture(view: { captureCharFrame(): string }): string {
+// Animation timers may request a native render while a frame is captured. The output lease is released by the event
+// loop, so the retry yields to it instead of blocking.
+async function capture(view: { captureCharFrame(): string }): Promise<string> {
   for (let attempt = 0; ; attempt++) {
     try {
       return view.captureCharFrame()
     } catch (error) {
       if (attempt >= 50 || !String(error).includes("OutputBusy")) throw error
-      Bun.sleepSync(2)
+      await Bun.sleep(2)
     }
   }
 }
 
-const root = fileURLToPath(new URL("..", import.meta.url))
-const temp = await mkdtemp(`${tmpdir()}/changelog-smoke-`)
-const pack = JSON.parse(
-  execFileSync("npm", ["pack", "--json", "--pack-destination", temp], { cwd: root, encoding: "utf8" }),
-)[0]
-assert.ok(
-  pack.files.some((file: { path: string }) => file.path === "dist/tui.js"),
-  "compiled plugin is packed",
-)
-const installed = `${temp}/installed`
-await mkdir(installed)
-// Test the locked host stack, not npm's inconsistent "latest" tags (Core 0.5 vs Solid 0.6).
-// These consumer-only overrides satisfy the real peers; the plugin manifest remains latest / *.
-const overrides = Object.fromEntries(
-  await Promise.all(
-    ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"].map(async (name) => [
-      name,
-      JSON.parse(await readFile(`${root}/node_modules/${name}/package.json`, "utf8")).version,
-    ]),
-  ),
-)
-await writeFile(`${installed}/package.json`, JSON.stringify({ private: true, type: "module", overrides }))
-execFileSync(
-  "npm",
-  [
-    "install",
-    "--prefix",
-    installed,
-    "--ignore-scripts",
-    "--omit=peer",
-    "--no-audit",
-    "--no-fund",
-    `${temp}/${pack.filename}`,
-  ],
-  { stdio: "pipe" },
-)
-for (const name of ["solid-js", "@opentui"])
-  await symlink(`${root}/node_modules/${name}`, `${installed}/node_modules/${name}`)
-const dist = `${installed}/node_modules/opencode2-changelog/dist`
-assert.equal(
-  typeof (await import(pathToFileURL(`${dist}/tui.js`).href)).default.setup,
-  "function",
-  "installed entry is V2 setup plugin",
-)
-const releases = (await import(pathToFileURL(`${dist}/releases.js`).href)) as typeof import("../src/releases")
-const translations = (await import(pathToFileURL(`${dist}/translation.js`).href)) as typeof import("../src/translation")
-const { ChangelogDialog } = await import(pathToFileURL(`${dist}/changelog-dialog.js`).href)
-// The dialog reads the context through the installed copy of the plugin SDK, so the provider must come from it too.
-const { PluginContextProvider } = (await import(
-  pathToFileURL(`${installed}/node_modules/@opencode/plugin/dist/tui/index.js`).href
-)) as typeof import("@opencode/plugin/tui")
-const { createBodyMotion } = (await import(
-  pathToFileURL(`${dist}/motion/engine.js`).href
-)) as typeof import("../src/motion/engine")
-const animations = (await import(pathToFileURL(`${dist}/motion/index.js`).href)) as typeof import("../src/motion")
-const modelPolicy = (await import(pathToFileURL(`${dist}/models.js`).href)) as typeof import("../src/models")
+const releases = await import("../src/releases")
+const translations = await import("../src/translation")
+const { ChangelogDialog } = await import("../src/changelog-dialog")
+const { PluginContextProvider } = await import("@opencode/plugin/tui")
+const { createBodyMotion } = await import("../src/motion/engine")
+const animations = await import("../src/motion/index")
+const modelPolicy = await import("../src/models")
+const { isFresh } = await import("../src/changelog-service")
+assert.equal(typeof (await import("../tui")).default.setup, "function", "the entry is a V2 setup plugin")
 
 const source = `# Changelog
 ## 1.9.0 — 2026-01-01
@@ -222,9 +172,6 @@ try {
     new Response("denied", { status: 403, statusText: "Forbidden" })) as unknown as typeof fetch
   await assert.rejects(releases.loadReleases(), /HTTP 403 Forbidden/)
   // Reported bug: right after an OpenCode update the cache lacks the new installed version; fetch it at once.
-  const { isFresh } = (await import(
-    pathToFileURL(`${dist}/changelog-service.js`).href
-  )) as typeof import("../src/changelog-service")
   const cachedNow = { at: Date.now(), releases: parsed, latest: "2.1.4", checked: [] as string[] }
   assert.equal(isFresh(cachedNow, ["2.1.4"]), true)
   assert.equal(isFresh(cachedNow, ["2.2.1"]), false, "a never looked-up installed version refreshes immediately")
@@ -539,7 +486,11 @@ const renderedProvider = {
       }
       uiCalls++
       if (holdFull && request.prompt.includes("FULL RELEASE MARKER"))
-        return await new Promise<{ text: string }>((resolve) => (finishFull = resolve))
+        return await new Promise<{ text: string }>((resolve, reject) => {
+          finishFull = resolve
+          // A held request that ignored its abort kept the 3-minute translation timeout, and the process, alive.
+          options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true })
+        })
       if (uiSuccess)
         return {
           text: request.prompt.includes("Requested output language: fr.")
@@ -589,35 +540,39 @@ const view = await testRender(
 )
 try {
   const frame = () => capture(view)
-  for (let i = 0; i < 150 && (!frame().includes("Translation failed") || !frame().includes("Fast feature")); i++) {
+  for (
+    let i = 0;
+    i < 150 && (!(await frame()).includes("Translation failed") || !(await frame()).includes("Fast feature"));
+    i++
+  ) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /What's new · 2\.1\.4/)
-  assert.match(frame(), /Model fixture ▾/, "the model selector is a primary reader control")
-  assert.match(frame(), /Fast feature/, "the readable original remains rendered after a translation error")
-  assert.match(frame(), /retry/)
-  assert.match(frame(), /Showing the original/, "a failed translation cannot masquerade as the selected language")
+  assert.match(await frame(), /What's new · 2\.1\.4/)
+  assert.match(await frame(), /Model fixture ▾/, "the model selector is a primary reader control")
+  assert.match(await frame(), /Fast feature/, "the readable original remains rendered after a translation error")
+  assert.match(await frame(), /retry/)
+  assert.match(await frame(), /Showing the original/, "a failed translation cannot masquerade as the selected language")
   setUiRelease({ ...release, version: "2.2.0", hash: "refreshed-source" })
   await view.renderOnce()
-  assert.match(frame(), /What's new · 2\.2\.0/, "refresh replaces the default latest release")
+  assert.match(await frame(), /What's new · 2\.2\.0/, "refresh replaces the default latest release")
   setUiLatest("2.2.1")
   await view.renderOnce()
   assert.match(
-    frame(),
+    await frame(),
     /Notes for 2\.2\.1 are not published yet — showing 2\.2\.0/,
     "a newer tag without notes is never silently replaced by an older release",
   )
   setUiLatest(undefined)
   setUiRelease(release)
   await view.renderOnce()
-  assert.doesNotMatch(frame(), /not published yet/)
+  assert.doesNotMatch(await frame(), /not published yet/)
   const reader = view.renderer.root.findDescendantById("changelog-reader")
   assert.ok(reader)
   const clickText = async (text: string) => {
-    const lines = frame().split("\n")
+    const lines = (await frame()).split("\n")
     const y = lines.findIndex((line) => line.includes(text))
-    assert.ok(y >= 0, `visible mouse target: ${text}\n${frame()}`)
+    assert.ok(y >= 0, `visible mouse target: ${text}\n${await frame()}`)
     await view.mockMouse.click(lines[y]!.indexOf(text) + 1, y)
     await view.renderOnce()
   }
@@ -627,7 +582,7 @@ try {
     reader,
     "language dropdown keeps the old reader mounted",
   )
-  assert.match(frame(), /Fast feature/, "the old notes remain visible beside the language popup")
+  assert.match(await frame(), /Fast feature/, "the old notes remain visible beside the language popup")
   await clickText("Русский · ru")
   await clickText("Version 2.1.4 ▾")
   assert.equal(
@@ -635,7 +590,7 @@ try {
     reader,
     "version dropdown keeps the old reader mounted",
   )
-  assert.match(frame(), /2026-10-01 · installed/, "versions are visibly selectable, the installed one marked")
+  assert.match(await frame(), /2026-10-01 · installed/, "versions are visibly selectable, the installed one marked")
   await clickText("2.1.4 · 2026-10-01")
   const count = uiCalls
   await Bun.sleep(150)
@@ -646,11 +601,11 @@ try {
   assert.equal(uiCalls, count, "editing interests in All does not restart even a failed translation")
   assert.equal(uiSelections, 0, "All never invokes selection")
   setUiSettings({ ...uiSettings(), detail: "personal", language: "en" })
-  for (let i = 0; i < 150 && !frame().includes("Full entry"); i++) {
+  for (let i = 0; i < 150 && !(await frame()).includes("Full entry"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /Full entry/, "personal view retains real selected entries")
+  assert.match(await frame(), /Full entry/, "personal view retains real selected entries")
   assert.equal(uiSelections, 1, "personal selection runs once in English")
   assert.equal(uiCalls, count, "English personal output is not translated")
   setUiSettings({ ...uiSettings(), language: "ru" })
@@ -666,25 +621,29 @@ try {
   assert.equal(uiCalls, count + 2, "leaving personal mode starts only one full translation")
   setUiSettings({ ...uiSettings(), detail: "full", language: "en" })
   setUiRelease({ ...release, markdown: "### Core\n```diff\n- unfinished", hash: "unsupported-selector-grammar" })
-  for (let i = 0; i < 150 && !frame().includes("unfinished"); i++) {
+  for (let i = 0; i < 150 && !(await frame()).includes("unfinished"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /unfinished/, "All remains usable when personal item parsing cannot handle the source")
-  assert.doesNotMatch(frame(), /Showing the full original/, "All does not run the personal parser")
+  assert.match(await frame(), /unfinished/, "All remains usable when personal item parsing cannot handle the source")
+  assert.doesNotMatch(await frame(), /Showing the full original/, "All does not run the personal parser")
   uiSuccess = true
   setUiSettings({ ...uiSettings(), language: "ru" })
-  for (let i = 0; i < 100 && !frame().includes("Русский текст переведён"); i++) {
+  for (let i = 0; i < 100 && !(await frame()).includes("Русский текст переведён"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /Русский текст переведён/)
+  assert.match(await frame(), /Русский текст переведён/)
   setUiSettings({ ...uiSettings(), language: "fr" })
-  for (let i = 0; i < 100 && !frame().includes("Le texte français"); i++) {
+  for (let i = 0; i < 100 && !(await frame()).includes("Le texte français"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /Le texte français/, "changing language replaces the reader with the successful translation")
+  assert.match(
+    await frame(),
+    /Le texte français/,
+    "changing language replaces the reader with the successful translation",
+  )
   setUiSettings({ ...uiSettings(), language: "en" })
   await view.renderOnce()
   await clickText("Model fixture ▾")
@@ -704,18 +663,18 @@ try {
   assert.equal(selects[2].current, "low", "a free model starts on its low variant")
   assert.deepEqual(reopened, ["2.1.4"], "the changelog window is reopened on the same version")
   await view.renderOnce()
-  assert.match(frame(), /Model pick-free ▾/, "model and variant selection only changes changelog settings")
+  assert.match(await frame(), /Model pick-free ▾/, "model and variant selection only changes changelog settings")
   setUiRelease({
     ...release,
     markdown: "### Highlights\n- Highlight item.\n\n### Changes\n- FULL RELEASE MARKER.",
     hash: "delayed-full",
   })
   setUiSettings({ ...settings(), detail: "important", language: "ru", animations: false })
-  for (let i = 0; i < 100 && !frame().includes("Русский текст переведён"); i++) {
+  for (let i = 0; i < 100 && !(await frame()).includes("Русский текст переведён"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /Русский текст переведён/)
+  assert.match(await frame(), /Русский текст переведён/)
   holdFull = true
   setUiSettings({ ...uiSettings(), detail: "full" })
   for (let i = 0; i < 50 && !finishFull; i++) {
@@ -724,14 +683,14 @@ try {
   }
   assert.ok(finishFull, "full release starts its own translation")
   await view.renderOnce()
-  assert.match(frame(), /Русский текст переведён/, "the previous translation stays visible while All loads")
-  assert.doesNotMatch(frame(), /FULL RELEASE MARKER/, "the untranslated full text does not flash during loading")
+  assert.match(await frame(), /Русский текст переведён/, "the previous translation stays visible while All loads")
+  assert.doesNotMatch(await frame(), /FULL RELEASE MARKER/, "the untranslated full text does not flash during loading")
   finishFull!({ text: "Полный перевод содержит все изменения этого выпуска и дополнительные исправления." })
-  for (let i = 0; i < 100 && !frame().includes("Полный перевод содержит"); i++) {
+  for (let i = 0; i < 100 && !(await frame()).includes("Полный перевод содержит"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /Полный перевод содержит/, "All displays the completed full translation")
+  assert.match(await frame(), /Полный перевод содержит/, "All displays the completed full translation")
   // Regression: notes refreshed upstream showed the previous translation until their own one arrived.
   finishFull = undefined
   setUiRelease({
@@ -744,12 +703,34 @@ try {
     await Bun.sleep(20)
   }
   assert.ok(finishFull, "refreshed notes start their own translation")
-  for (let i = 0; i < 10 && !frame().includes("refreshed upstream"); i++) {
+  for (let i = 0; i < 10 && !(await frame()).includes("refreshed upstream"); i++) {
     await view.renderOnce()
     await Bun.sleep(20)
   }
-  assert.match(frame(), /refreshed upstream/, "refreshed notes show their original while being translated")
-  assert.doesNotMatch(frame(), /Полный перевод/, "the previous notes' translation is not shown for refreshed notes")
+  assert.match(await frame(), /refreshed upstream/, "refreshed notes show their original while being translated")
+  assert.doesNotMatch(
+    await frame(),
+    /Полный перевод/,
+    "the previous notes' translation is not shown for refreshed notes",
+  )
+  // Regression: a refresh during a running loading animation kept the previous notes frozen under it.
+  setUiSettings({ ...uiSettings(), animations: true })
+  for (let i = 0; i < 5; i++) {
+    await view.renderOnce()
+    await Bun.sleep(20)
+  }
+  finishFull = undefined
+  setUiRelease({
+    ...release,
+    markdown: "### Highlights\n- Highlight item.\n\n### Changes\n- FULL RELEASE MARKER, second wave.",
+    hash: "second-refresh",
+  })
+  for (let i = 0; i < 100 && !(finishFull && (await frame()).includes("second")); i++) {
+    await view.renderOnce()
+    await Bun.sleep(20)
+  }
+  assert.match(await frame(), /second/, "notes refreshed during a wait are shown under the loading animation")
+  setUiSettings({ ...uiSettings(), animations: false })
   // Assigned by the held provider callback, which TypeScript's narrowing cannot see.
   ;(finishFull as ((value: { text: string }) => void) | undefined)!({
     text: "Полный перевод содержит все изменения этого выпуска и дополнительные исправления.",
@@ -829,10 +810,10 @@ try {
   await animated.renderOnce()
   motion.wait()
   await animated.renderOnce()
-  const first = capture(animated)
+  const first = await capture(animated)
   await Bun.sleep(180)
   await animated.renderOnce()
-  const second = capture(animated)
+  const second = await capture(animated)
   assert.notEqual(first, second, "actual waiting glyphs move, not only an invisible clock")
   assert.notEqual(
     first.split("\n")[bodyRows - 1],
@@ -859,7 +840,7 @@ try {
   }
   await animated.renderOnce()
   assert.equal(motion.phase(), "idle", "reveal ends without an idle render loop")
-  assert.match(capture(animated), /Русский текст/)
+  assert.match(await capture(animated), /Русский текст/)
   const stoppedFrame = motion.frame()
   await Bun.sleep(150)
   assert.equal(motion.frame(), stoppedFrame, "animation timers stop at idle")
@@ -870,7 +851,7 @@ try {
   await Bun.sleep(20)
   await animated.renderOnce()
   assert.match(
-    capture(animated),
+    await capture(animated),
     /Disabled motion still applies/,
     "skipping an effect cannot discard a completed result",
   )
@@ -879,5 +860,3 @@ try {
   animated.renderer.destroy()
 }
 console.log("smoke ok")
-// A failed run keeps its temporary package for inspection.
-rmSync(temp, { recursive: true, force: true })

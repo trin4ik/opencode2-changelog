@@ -30,7 +30,8 @@ commands that clash with built-in ones.
 npm ci
 npm run check         # tsc
 npm run format:check  # Prettier: no semicolons, printWidth 120
-npm test              # the single smoke test (Bun)
+npm test              # fast offline check of the sources (Bun), a few seconds — during development
+npm run test:install  # Docker install test on the minimum and newest OpenCode — before a release
 npm run build         # dist/, written atomically (a running TUI hot-reloads it)
 ```
 
@@ -53,6 +54,20 @@ npm run build         # dist/, written atomically (a running TUI hot-reloads it)
 - Start every source file with a one-line purpose comment; comment non-obvious decisions and their limits. Comments
   are in English.
 
+## Code style
+
+New and changed code follows the style of OpenCode 2 itself and its official plugins, taken from the newest stable
+`v2.x.y` tag of [anomalyco/opencode](https://github.com/anomalyco/opencode), not from memory:
+
+- the "Style Guide" in the root `AGENTS.md` (const over let, early returns, no unneeded destructuring, aliases or
+  star imports, few `try`/`catch`, no `any`, inference over annotations, no single-use helpers);
+- `packages/plugin/AGENTS.md` and `packages/tui/AGENTS.md`;
+- official plugin code as examples: `packages/tui/src/feature-plugins/`, `packages/plugins/`,
+  `packages/plugin-browser/`.
+
+Where those rules conflict with the rules above (purpose comments, Node built-ins in the installer, Prettier settings),
+the rules of this file win. Existing code is aligned when it is touched, not in a separate rewrite.
+
 ## Design principles
 
 - The reader stays visible under the version, language and view dropdowns.
@@ -66,17 +81,29 @@ npm run build         # dist/, written atomically (a running TUI hot-reloads it)
 
 ## Tests
 
-There is **one** integration smoke test, `test/smoke.tsx`: it packs and installs the plugin, then checks release
-parsing and source merging, caches, cancellation, the free-model policy, the real OpenTUI renderer and the animation
-engine — offline, with fake providers and no credentials. Do not grow it into a unit-test matrix. Add an assertion
-only for a concrete regression you are fixing. Visual changes are additionally checked by hand in a real TUI.
+Two tests, no unit-test matrix:
+
+- `npm test` (`test/smoke.tsx`) — run during development. It imports the sources directly and checks release parsing
+  and source merging, caches, cancellation, the free-model policy, the real OpenTUI renderer and the animation engine,
+  offline, with fake providers and no credentials. It must stay a few seconds: no packing, installing or network, and
+  a held fake request must settle on abort (a dangling one kept the 3-minute translation timeout alive). Add an
+  assertion only for a concrete regression you are fixing.
+- `npm run test:install` (`test/install.mjs`) — run before a release, on the committed HEAD. For the minimum and the
+  newest OpenCode 2 from npm, a clean Docker container clones the repository, runs `scripts/install.mjs` as the README
+  says and opens `/changelog` in the real TUI. Needs Docker and network.
+
+Visual changes are additionally checked by hand in a real TUI.
 
 ## Contributing flow
 
 1. Open an issue first for new features; bug fixes may go straight to a PR.
 2. Keep PRs small and focused; use Conventional Commits (`fix:`, `feat:`, `refactor:`, `docs:`).
-3. Run check, format and test; describe how you verified the change (for visuals: terminal, OpenCode version,
+3. Run check, format and `npm test`; describe how you verified the change (for visuals: terminal, OpenCode version,
    a screenshot or GIF).
 4. When an upstream assumption changes, update `docs/upstream-audit.md` with the version you checked.
-5. Releases: bump `version` in `package.json` (semver; the README badge too), add a section to `CHANGELOG.md`, tag
+5. Before every release, run two reviewer subagents in parallel with the brief in
+   [docs/review-prompt.md](docs/review-prompt.md) over the diff since the previous release tag: `openai/gpt-6.1-sol-fast#high`
+   and `anthropic/claude-opus-5-5#high`. Never a weaker model. Fix or consciously reject each finding.
+6. Commit, then run `npm run test:install`.
+7. Releases: bump `version` in `package.json` (semver; the README badge too), add a section to `CHANGELOG.md`, tag
    `vX.Y.Z` and publish a GitHub Release with that section. The package is not published to npm.
